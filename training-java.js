@@ -60,15 +60,24 @@ function normalizeText(s) {
 
 // あるスコープ（行 or ページ全体）の中から、ラベル文字列に一致する
 // .bst-field / .bst-table 要素を返す。
+// ラベルは <span class="bst-field-caption"> / <span class="bst-table-caption"> に入る。
+function getCaptionText(wrapper) {
+    // 直近のキャプション span を取得（入れ子フィールドの誤検出を避けるため
+    // 取得した span が別の .bst-field/.bst-table の中にあれば無視する）
+    var cap = wrapper.querySelector('.bst-field-caption, .bst-table-caption, .bst-label');
+    if (!cap) return '';
+    var owner = cap.closest('.bst-field, .bst-table');
+    if (owner && owner !== wrapper) return ''; // それは入れ子の子フィールドのもの
+    return cap.textContent;
+}
+
 function findFieldByLabel(labelText, root) {
     var scope = root || document;
     var target = normalizeText(labelText);
     var wrappers = scope.querySelectorAll('.bst-field, .bst-table');
     for (var i = 0; i < wrappers.length; i++) {
-        var lbl = wrappers[i].querySelector('.bst-label');
-        if (!lbl) continue;
-        // ラベルの先頭テキストだけを見る（入力値やガイド文を巻き込まない）
-        var txt = normalizeText(lbl.textContent);
+        var txt = normalizeText(getCaptionText(wrappers[i]));
+        if (!txt) continue;
         // 完全一致を優先しつつ、ラベルが長い場合は前方一致も許可
         if (txt === target || txt.indexOf(target) === 0) {
             return wrappers[i];
@@ -81,7 +90,13 @@ function findFieldByLabel(labelText, root) {
 function setFieldVisible(labelText, visible, root) {
     var el = findFieldByLabel(labelText, root);
     if (!el) return;
-    el.style.display = visible ? '' : 'none';
+    if (visible) {
+        el.style.display = '';
+        el.classList.remove('bst-cond-hidden');
+    } else {
+        el.style.display = 'none';
+        el.classList.add('bst-cond-hidden');
+    }
     el.querySelectorAll('input, select, textarea').forEach(function (inp) {
         inp.disabled = !visible;
     });
@@ -136,21 +151,50 @@ function applyTransportRules(root) {
 function getBusinessTripValue() {
     var el = findFieldByLabel(LBL.businessTrip);
     if (!el) return '';
-    // チェックボックスでチェックされている input の value を読む
-    var checked = el.querySelector('input:checked');
-    if (checked) return checked.value || '';
+    // このフォームのチェックボックスは選択値を .bst-guide に保持する
     var guide = el.querySelector('.bst-guide');
-    return guide ? guide.textContent : '';
+    if (guide && guide.textContent.trim()) return guide.textContent;
+    var checked = el.querySelector('input:checked');
+    return checked ? (checked.value || '') : '';
 }
 
 // 出張申請の条件を適用（有 → 表示 / 無 → 非表示）
 function applyBusinessTripRules() {
     var v = normalizeText(getBusinessTripValue());
-    var show = (v.indexOf('有') === 0); // 「有」のときだけ表示、それ以外（無・未選択）は非表示
+    // 「有」を含めば表示。「無」や未選択は非表示。
+    var show = (v.indexOf('有') !== -1) && (v.indexOf('無') === -1);
     setFieldVisible(LBL.domesticRate,  show);
     setFieldVisible(LBL.numberOfDays,  show);
     setFieldVisible(LBL.magnification, show);
     setFieldVisible(LBL.tripAllowance, show);
+}
+
+// 新幹線（総務手配）はチェックボックスのため複数選択できてしまう。
+// JS でラジオ風に「1つだけ」選択できるよう強制する。
+function enforceSingleSelectShinkansen(root) {
+    var el = findFieldByLabel(LBL.shinkansen, root);
+    if (!el) return;
+    var inputs = el.querySelectorAll('input[type="checkbox"], input');
+    inputs.forEach(function (inp) {
+        if (inp.dataset.ssBound === '1') return;
+        inp.dataset.ssBound = '1';
+        inp.addEventListener('change', function () {
+            if (inp.checked) {
+                inputs.forEach(function (other) {
+                    if (other !== inp) other.checked = false;
+                });
+                var guide = el.querySelector('.bst-guide');
+                if (guide) guide.textContent = inp.value;
+            }
+        });
+    });
+    // 初期状態で既に複数チェックされている場合は最初の1つだけ残す
+    var checkedList = el.querySelectorAll('input:checked');
+    if (checkedList.length > 1) {
+        for (var i = 1; i < checkedList.length; i++) checkedList[i].checked = false;
+        var g = el.querySelector('.bst-guide');
+        if (g) g.textContent = checkedList[0].value;
+    }
 }
 
 // 全ての条件を再評価（行ごとに交通機関、ページ全体で出張申請）
@@ -159,14 +203,16 @@ function applyAllConditions() {
     var transportFields = document.querySelectorAll('.bst-field');
     var handledRows = [];
     transportFields.forEach(function (f) {
-        var lbl = f.querySelector('.bst-label');
-        if (!lbl) return;
-        if (normalizeText(lbl.textContent).indexOf(normalizeText(LBL.transportation)) !== 0) return;
+        var cap = normalizeText(getCaptionText(f));
+        if (!cap) return;
+        if (cap.indexOf(normalizeText(LBL.transportation)) !== 0) return;
         // この交通機関フィールドが属する行（bst-scope）をスコープにする
         var row = f.closest('tr.bst-scope') || document;
         if (handledRows.indexOf(row) !== -1) return;
         handledRows.push(row);
-        applyTransportRules(row === document ? document : row);
+        var scope = (row === document) ? document : row;
+        applyTransportRules(scope);
+        enforceSingleSelectShinkansen(scope); // 新幹線（総務手配）の単一選択化
     });
     applyBusinessTripRules();
 }
@@ -175,13 +221,13 @@ function applyAllConditions() {
 function bindConditionListeners() {
     // 交通機関ドロップダウン
     document.querySelectorAll('.bst-field').forEach(function (f) {
-        var lbl = f.querySelector('.bst-label');
-        if (!lbl) return;
-        var ltxt = normalizeText(lbl.textContent);
+        var ltxt = normalizeText(getCaptionText(f));
+        if (!ltxt) return;
 
-        var isTransport   = ltxt.indexOf(normalizeText(LBL.transportation)) === 0;
+        var isTransport    = ltxt.indexOf(normalizeText(LBL.transportation)) === 0;
         var isBusinessTrip = ltxt.indexOf(normalizeText(LBL.businessTrip)) === 0;
-        if (!isTransport && !isBusinessTrip) return;
+        var isShinkansen   = ltxt.indexOf(normalizeText(LBL.shinkansen)) === 0;
+        if (!isTransport && !isBusinessTrip && !isShinkansen) return;
         if (f.dataset.condBound === '1') return;
         f.dataset.condBound = '1';
 
