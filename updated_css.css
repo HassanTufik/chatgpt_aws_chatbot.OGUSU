@@ -1,0 +1,53 @@
+#saveButton {
+  position: fixed; /* 画面に固定 */
+  top: 20px; /* 画面下からの位置 */
+  right: 120px; /* 画面右からの位置 */
+  background: linear-gradient(to right, #4CAF50, #81C784); /* 緑系のグラデーション背景 */
+  border: none; /* 枠線なし */
+  border-radius: 8px; /* 角を丸くする */
+  color: white; /* 文字色を白に */
+  font-size: 16px; /* フォントサイズ */
+  font-weight: bold; /* 太字 */
+  padding: 10px 20px; /* 余白を追加 */
+  cursor: pointer; /* カーソルをポインターに */
+  transition: transform 0.2s, box-shadow 0.2s; /* ホバー時のアニメーション */
+  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); /* シャドウを追加 */
+  z-index: 1000; /* 他の要素より上に表示 */
+}
+
+#saveButton:hover {
+  transform: scale(1.05); /* ホバー時に拡大 */
+  box-shadow: 0px 6px 8px rgba(0, 0, 0, 0.2); /* ホバー時のシャドウを強調 */
+}
+
+#saveButton:active {
+  transform: scale(0.95); /* クリック時に縮小 */
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1); /* クリック時のシャドウを減少 */
+}
+
+#clearButton {
+  position: fixed; /* 画面に固定 */
+  top: 20px; /* 画面下からの位置 */
+  right: 20px; /* 画面右からの位置 */
+  background: linear-gradient(to right, #FF5733, #FF8D72); /* 赤系のグラデーション背景 */
+  border: none; /* 枠線なし */
+  border-radius: 8px; /* 角を丸くする */
+  color: white; /* 文字色を白に */
+  font-size: 16px; /* フォントサイズ */
+  font-weight: bold; /* 太字 */
+  padding: 10px 20px; /* 余白を追加 */
+  cursor: pointer; /* カーソルをポインターに */
+  transition: transform 0.2s, box-shadow 0.2s; /* ホバー時のアニメーション */
+  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); /* シャドウを追加 */
+  z-index: 1000; /* 他の要素より上に表示 */
+}
+
+#clearButton:hover {
+  transform: scale(1.05); /* ホバー時に拡大 */
+  box-shadow: 0px 6px 8px rgba(0, 0, 0, 0.2); /* ホバー時のシャドウを強調 */
+}
+
+#clearButton:active {
+  transform: scale(0.95); /* クリック時に縮小 */
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1); /* クリック時のシャドウを減少 */
+}
