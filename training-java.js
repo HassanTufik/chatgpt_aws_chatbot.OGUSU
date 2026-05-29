@@ -27,152 +27,131 @@ async function fetchData(hash) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  条件付き表示ロジック (Conditional field visibility)
-//  フィールドコードではなく「ラベル文字列」で対象を特定するため、
-//  kintone のフィールドコードが変わっても動作します。
-//  Matches fields by their visible LABEL text, not field codes,
-//  so it keeps working even if the underlying field codes differ.
+//  条件付き入力制御 (Conditional read-only)  v4
+//  ・「非表示」ではなく「読み取り専用(readonly/disabled)」で制御
+//  ・対象は field-id 完全一致で特定（経理用などの誤検出を防止）
+//  ・交通機関はサブテーブル行ごと、出張申請はページ全体
 // ══════════════════════════════════════════════════════════════════════
+console.log('[webformassist] conditional read-only rules v4 loaded');
 
-// 画面に表示されているラベル文字列（スクリーンショットの表記に合わせています）
-var LBL = {
-    transportation : '交通機関',          // dropdown
-    vehicleName    : '車種名',            // text
-    oneWayDistance : '片道距離',          // number
-    fee            : '料金',              // number
-    shinkansen     : '新幹線（総務手配）',  // checkbox 利用 / 利用なし
-    // 出張申請セクション
-    businessTrip   : '出張申請',          // checkbox 無 / 有
-    domesticRate   : '国内出張単価',
-    numberOfDays   : '日数',
-    magnification  : '倍率',
-    tripAllowance  : '出張手当'
+// 画面に出る field-id（スクリーンショットで確認した実コード）
+var FID = {
+    transportation : '交通機関',        // dropdown (row)
+    vehicleName    : '車種名',          // text     (row)
+    oneWayDistance : '片道距離',        // number   (row)
+    fee            : '料金',            // number   (row)
+    shinkansen     : 'チェックボックス_0', // checkbox 利用/利用なし (row) = 新幹線（総務手配）
+    businessTrip   : 'ラジオボタン',     // radio 無/有
+    numberOfDays   : '出張日数',        // number
+    domesticRate   : '国内出張単価_0',   // 有のとき表示
+    magnification  : '倍率',            // 有のとき表示
+    tripAllowance  : '出張手当'         // 有のとき表示
 };
 
-// 全角・半角スペースや括弧の違いを無視して比較するための正規化
 function normalizeText(s) {
     if (!s) return '';
-    return s
-        .replace(/[（）]/g, m => (m === '（' ? '(' : ')')) // 全角括弧→半角
-        .replace(/\s+/g, '')                                // 空白除去
-        .trim();
+    return s.replace(/[（）]/g, function (m) { return m === '（' ? '(' : ')'; })
+            .replace(/\s+/g, '').trim();
 }
 
-// あるスコープ（行 or ページ全体）の中から、ラベル文字列に一致する
-// .bst-field / .bst-table 要素を返す。
-// ラベルは <span class="bst-field-caption"> / <span class="bst-table-caption"> に入る。
-function getCaptionText(wrapper) {
-    // 直近のキャプション span を取得（入れ子フィールドの誤検出を避けるため
-    // 取得した span が別の .bst-field/.bst-table の中にあれば無視する）
-    var cap = wrapper.querySelector('.bst-field-caption, .bst-table-caption, .bst-label');
-    if (!cap) return '';
-    var owner = cap.closest('.bst-field, .bst-table');
-    if (owner && owner !== wrapper) return ''; // それは入れ子の子フィールドのもの
-    return cap.textContent;
-}
-
-function findFieldByLabel(labelText, root) {
+// field-id 完全一致で要素を取得（scope 内）
+function getField(fieldId, root) {
     var scope = root || document;
-    var target = normalizeText(labelText);
-    var wrappers = scope.querySelectorAll('.bst-field, .bst-table');
-    for (var i = 0; i < wrappers.length; i++) {
-        var txt = normalizeText(getCaptionText(wrappers[i]));
-        if (!txt) continue;
-        // 完全一致を優先しつつ、ラベルが長い場合は前方一致も許可
-        if (txt === target || txt.indexOf(target) === 0) {
-            return wrappers[i];
-        }
-    }
-    return null;
+    return scope.querySelector('.bst-field[field-id="' + fieldId + '"], .bst-table[field-id="' + fieldId + '"]');
 }
 
-// フィールドの表示/非表示を切り替え、非表示時は入力を無効化（送信されないように）
-function setFieldVisible(labelText, visible, root) {
-    var el = findFieldByLabel(labelText, root);
+// 読み取り専用の ON/OFF。視覚的にグレーアウトしつつ編集不可にする。
+function setReadOnly(fieldId, readOnly, root) {
+    var el = getField(fieldId, root);
     if (!el) return;
-    if (visible) {
-        el.style.display = '';
-        el.classList.remove('bst-cond-hidden');
-    } else {
-        el.style.display = 'none';
-        el.classList.add('bst-cond-hidden');
-    }
     el.querySelectorAll('input, select, textarea').forEach(function (inp) {
-        inp.disabled = !visible;
+        if (inp.type === 'checkbox' || inp.type === 'radio') {
+            // checkbox/radio は readonly が効かないため disabled を使う
+            inp.disabled = readOnly;
+        } else {
+            inp.readOnly = readOnly;
+            inp.disabled = false; // disabled だと送信されないので readOnly を使う
+        }
     });
+    if (readOnly) {
+        el.classList.add('bst-cond-readonly');
+        el.style.setProperty('opacity', '0.55');
+        el.style.setProperty('pointer-events', 'none');
+    } else {
+        el.classList.remove('bst-cond-readonly');
+        el.style.removeProperty('opacity');
+        el.style.removeProperty('pointer-events');
+    }
 }
 
-// 現在選択されている交通機関の値を取得（ドロップダウン or ガイド表示）
+// 完全に表示/非表示（出張の3項目用）
+function setHidden(fieldId, hidden, root) {
+    var el = getField(fieldId, root);
+    if (!el) return;
+    if (hidden) {
+        el.classList.add('bst-cond-hidden');
+        el.style.setProperty('display', 'none', 'important');
+        el.querySelectorAll('input, select, textarea').forEach(function (i) { i.disabled = true; });
+    } else {
+        el.classList.remove('bst-cond-hidden');
+        el.classList.remove('bst-unuse');
+        el.style.removeProperty('display');
+        el.querySelectorAll('input, select, textarea').forEach(function (i) { i.disabled = false; });
+    }
+}
+
+// 交通機関の現在値
 function getTransportValue(root) {
-    var el = findFieldByLabel(LBL.transportation, root);
+    var el = getField(FID.transportation, root);
     if (!el) return '';
     var sel = el.querySelector('select');
     if (sel && sel.value) return sel.value;
     var guide = el.querySelector('.bst-guide');
-    if (guide) return guide.textContent;
-    var input = el.querySelector('input');
-    return input ? input.value : '';
+    return guide ? guide.textContent : '';
 }
 
-// 交通機関の条件を1行（root スコープ）に適用
-function applyTransportRules(root) {
-    var v = normalizeText(getTransportValue(root));
-
-    // まず従属フィールドを全て非表示
-    setFieldVisible(LBL.vehicleName,    false, root);
-    setFieldVisible(LBL.oneWayDistance, false, root);
-    setFieldVisible(LBL.fee,            false, root);
-    setFieldVisible(LBL.shinkansen,     false, root);
-
-    if (v.indexOf('社用自動車') === 0 || v.indexOf('社用') === 0) {
-        // 1. 社用自動車 → 車種名 のみ
-        setFieldVisible(LBL.vehicleName, true, root);
-    } else if (v.indexOf('自家用車') === 0 || v.indexOf('自家用') === 0) {
-        // 2. 自家用車 → 車種名 + 片道距離
-        setFieldVisible(LBL.vehicleName,    true, root);
-        setFieldVisible(LBL.oneWayDistance, true, root);
-    } else if (v.indexOf('新幹線') === 0) {
-        // 5. 新幹線 → 料金 + 新幹線（総務手配）
-        setFieldVisible(LBL.fee,        true, root);
-        setFieldVisible(LBL.shinkansen, true, root);
-    } else if (v.indexOf('バス') === 0) {
-        // 3. バス → 料金
-        setFieldVisible(LBL.fee, true, root);
-    } else if (v.indexOf('電車') === 0) {
-        // 4. 電車 → 料金
-        setFieldVisible(LBL.fee, true, root);
-    } else if (v.indexOf('その他') === 0) {
-        // 6. その他 → 料金
-        setFieldVisible(LBL.fee, true, root);
-    }
-}
-
-// 出張申請（無/有）の値を取得
-function getBusinessTripValue() {
-    var el = findFieldByLabel(LBL.businessTrip);
+// 新幹線（総務手配）の選択値（利用 / 利用なし）
+function getShinkansenValue(root) {
+    var el = getField(FID.shinkansen, root);
     if (!el) return '';
-    // このフォームのチェックボックスは選択値を .bst-guide に保持する
     var guide = el.querySelector('.bst-guide');
     if (guide && guide.textContent.trim()) return guide.textContent;
     var checked = el.querySelector('input:checked');
     return checked ? (checked.value || '') : '';
 }
 
-// 出張申請の条件を適用（有 → 表示 / 無 → 非表示）
-function applyBusinessTripRules() {
-    var v = normalizeText(getBusinessTripValue());
-    // 「有」を含めば表示。「無」や未選択は非表示。
-    var show = (v.indexOf('有') !== -1) && (v.indexOf('無') === -1);
-    setFieldVisible(LBL.domesticRate,  show);
-    setFieldVisible(LBL.numberOfDays,  show);
-    setFieldVisible(LBL.magnification, show);
-    setFieldVisible(LBL.tripAllowance, show);
+// 1行ぶんの交通機関ルールを適用
+function applyTransportRules(root) {
+    var v = normalizeText(getTransportValue(root));
+
+    // 既定：すべて読み取り専用
+    setReadOnly(FID.vehicleName,    true, root);
+    setReadOnly(FID.oneWayDistance, true, root);
+    setReadOnly(FID.fee,            true, root);
+    setReadOnly(FID.shinkansen,     true, root);
+
+    if (v === '社用自動車') {
+        setReadOnly(FID.vehicleName, false, root);                 // 車種名のみ
+    } else if (v === '自家用車') {
+        setReadOnly(FID.vehicleName,    false, root);              // 車種名 + 片道距離
+        setReadOnly(FID.oneWayDistance, false, root);
+    } else if (v === 'バス' || v === '電車' || v === '新幹線' || v === 'その他') {
+        setReadOnly(FID.fee, false, root);                         // 料金のみ
+    }
+
+    // 「新幹線（総務手配）」で利用が選択されている場合も 料金 のみ編集可
+    var s = normalizeText(getShinkansenValue(root));
+    if (s.indexOf('利用') === 0 && s !== '利用なし') {
+        setReadOnly(FID.vehicleName,    true, root);
+        setReadOnly(FID.oneWayDistance, true, root);
+        setReadOnly(FID.shinkansen,     true, root);
+        setReadOnly(FID.fee,            false, root);
+    }
 }
 
-// 新幹線（総務手配）はチェックボックスのため複数選択できてしまう。
-// JS でラジオ風に「1つだけ」選択できるよう強制する。
+// 新幹線（総務手配）チェックボックスを1つだけ選択可能にする
 function enforceSingleSelectShinkansen(root) {
-    var el = findFieldByLabel(LBL.shinkansen, root);
+    var el = getField(FID.shinkansen, root);
     if (!el) return;
     var inputs = el.querySelectorAll('input[type="checkbox"], input');
     inputs.forEach(function (inp) {
@@ -180,76 +159,73 @@ function enforceSingleSelectShinkansen(root) {
         inp.dataset.ssBound = '1';
         inp.addEventListener('change', function () {
             if (inp.checked) {
-                inputs.forEach(function (other) {
-                    if (other !== inp) other.checked = false;
-                });
-                var guide = el.querySelector('.bst-guide');
-                if (guide) guide.textContent = inp.value;
+                inputs.forEach(function (other) { if (other !== inp) other.checked = false; });
+                var g = el.querySelector('.bst-guide');
+                if (g) g.textContent = inp.value;
             }
         });
     });
-    // 初期状態で既に複数チェックされている場合は最初の1つだけ残す
     var checkedList = el.querySelectorAll('input:checked');
     if (checkedList.length > 1) {
         for (var i = 1; i < checkedList.length; i++) checkedList[i].checked = false;
-        var g = el.querySelector('.bst-guide');
-        if (g) g.textContent = checkedList[0].value;
+        var g2 = el.querySelector('.bst-guide');
+        if (g2) g2.textContent = checkedList[0].value;
     }
 }
 
-// 全ての条件を再評価（行ごとに交通機関、ページ全体で出張申請）
+// 出張申請（無/有）の値
+function getBusinessTripValue() {
+    var el = getField(FID.businessTrip);
+    if (!el) return '';
+    var checked = el.querySelector('input:checked');
+    if (checked) return checked.value || '';
+    var guide = el.querySelector('.bst-guide');
+    return guide ? guide.textContent : '';
+}
+
+// 出張申請ルール：無→日数編集可＆3項目非表示 / 有→日数読み取り専用＆3項目表示
+function applyBusinessTripRules() {
+    var v = normalizeText(getBusinessTripValue());
+    var isYes = (v.indexOf('有') !== -1) && (v.indexOf('無') === -1);
+
+    setReadOnly(FID.numberOfDays, isYes);          // 有のとき日数を読み取り専用
+    setHidden(FID.domesticRate,  !isYes);          // 有のときだけ表示
+    setHidden(FID.magnification, !isYes);
+    setHidden(FID.tripAllowance, !isYes);
+}
+
+// すべての条件を再評価
 function applyAllConditions() {
-    // 交通機関フィールドを含む各スコープ（サブテーブル行 or それ以外）に適用
-    var transportFields = document.querySelectorAll('.bst-field');
     var handledRows = [];
-    transportFields.forEach(function (f) {
-        var cap = normalizeText(getCaptionText(f));
-        if (!cap) return;
-        if (cap.indexOf(normalizeText(LBL.transportation)) !== 0) return;
-        // この交通機関フィールドが属する行（bst-scope）をスコープにする
+    document.querySelectorAll('.bst-field[field-id="' + FID.transportation + '"]').forEach(function (f) {
         var row = f.closest('tr.bst-scope') || document;
         if (handledRows.indexOf(row) !== -1) return;
         handledRows.push(row);
         var scope = (row === document) ? document : row;
+        enforceSingleSelectShinkansen(scope);
         applyTransportRules(scope);
-        enforceSingleSelectShinkansen(scope); // 新幹線（総務手配）の単一選択化
     });
     applyBusinessTripRules();
 }
 
-// 変更イベントを各コントロールに結び付ける（二重登録防止つき）
+// 変更イベントを結び付ける（二重登録防止）
 function bindConditionListeners() {
-    // 交通機関ドロップダウン
-    document.querySelectorAll('.bst-field').forEach(function (f) {
-        var ltxt = normalizeText(getCaptionText(f));
-        if (!ltxt) return;
-
-        var isTransport    = ltxt.indexOf(normalizeText(LBL.transportation)) === 0;
-        var isBusinessTrip = ltxt.indexOf(normalizeText(LBL.businessTrip)) === 0;
-        var isShinkansen   = ltxt.indexOf(normalizeText(LBL.shinkansen)) === 0;
-        if (!isTransport && !isBusinessTrip && !isShinkansen) return;
-        if (f.dataset.condBound === '1') return;
-        f.dataset.condBound = '1';
-
-        var recompute = function () { setTimeout(applyAllConditions, 0); };
-
-        f.querySelectorAll('select').forEach(function (s) {
-            s.addEventListener('change', recompute);
+    var watchIds = [FID.transportation, FID.shinkansen, FID.businessTrip];
+    watchIds.forEach(function (fid) {
+        document.querySelectorAll('.bst-field[field-id="' + fid + '"]').forEach(function (f) {
+            if (f.dataset.condBound === '1') return;
+            f.dataset.condBound = '1';
+            var recompute = function () { setTimeout(applyAllConditions, 0); };
+            f.querySelectorAll('select').forEach(function (s) { s.addEventListener('change', recompute); });
+            f.querySelectorAll('input').forEach(function (inp) { inp.addEventListener('change', recompute); });
+            f.addEventListener('click', recompute);
         });
-        f.querySelectorAll('input').forEach(function (inp) {
-            inp.addEventListener('change', recompute);
-        });
-        // bst-injector はクリックで .bst-guide を更新するため click も拾う
-        f.addEventListener('click', recompute);
     });
 }
 
-// 初期化：リスナー登録＋初回評価。サブテーブル行追加にも追従。
 function initConditions() {
     bindConditionListeners();
     applyAllConditions();
-
-    // ＋ボタンで行が増えたときに再バインド＆再評価する
     var body = document.querySelector('.bst-injector-body') || document.body;
     var mo = new MutationObserver(function () {
         bindConditionListeners();
@@ -257,6 +233,20 @@ function initConditions() {
     });
     mo.observe(body, { childList: true, subtree: true });
 }
+
+// 自己完結ブートストラップ：交通機関が現れるまで待ってから初期化
+(function bootstrapConditions() {
+    var tries = 0;
+    var timer = setInterval(function () {
+        tries++;
+        if (getField(FID.transportation)) {
+            clearInterval(timer);
+            initConditions();
+        } else if (tries > 40) {
+            clearInterval(timer);
+        }
+    }, 500);
+})();
 
 function extractType(field,key,idx) {
     var query;
@@ -575,8 +565,7 @@ window.addEventListener('load', function () {
                     } else {
                         console.log('No data found for the given hash.');
                     }
-                })
-                .then(function () { initConditions(); });
+                });
         }
         if(!params.size){
             // 前回保存されたデータをlocalStorageから読み込む
@@ -587,7 +576,7 @@ window.addEventListener('load', function () {
                     setItemdata(data.fields[key],key);
                 });
             }
-            initConditions();
+        
         }
 
         // 保存ボタンを作成
